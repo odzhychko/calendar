@@ -555,6 +555,60 @@ export default defineStore('calendarObjectInstance', {
 		},
 
 		/**
+		 * Change the current attendee's participation status and save it with
+		 * the scope of the component the attendee is responding to.
+		 *
+		 * Responses to generated occurrences apply to the recurring master,
+		 * while responses to existing recurrence exceptions remain on the
+		 * exception.
+		 *
+		 * @param {object} data The destructuring object
+		 * @param {object} data.attendee The attendee object
+		 * @param {string} data.participationStatus New participation status
+		 * @return {Promise<void>}
+		 */
+		async saveAttendeeParticipationResponse({
+			attendee,
+			participationStatus,
+		}) {
+			const calendarObjectsStore = useCalendarObjectsStore()
+			const eventComponent = this.calendarObjectInstance.eventComponent
+			const responseScope = eventComponent.isRecurrenceException() ? 'occurrence' : 'series'
+			let attendeeProperty = attendee.attendeeProperty
+
+			if (responseScope === 'series') {
+				let baseComponent = null
+				for (const component of this.calendarObject.calendarComponent.getComponentIterator()) {
+					if (component.name === eventComponent.name && !component.hasProperty('RECURRENCE-ID')) {
+						baseComponent = component
+						break
+					}
+				}
+
+				if (baseComponent === null) {
+					throw new Error('Recurring master component not found')
+				}
+
+				const attendeeEmail = attendeeProperty.email.toLowerCase()
+				attendeeProperty = null
+				for (const masterAttendee of baseComponent.getAttendeeIterator()) {
+					if (masterAttendee.email.toLowerCase() === attendeeEmail) {
+						attendeeProperty = masterAttendee
+						break
+					}
+				}
+
+				if (attendeeProperty === null) {
+					throw new Error('Attendee not found on recurring master component')
+				}
+			}
+
+			attendeeProperty.participationStatus = participationStatus
+			attendee.participationStatus = participationStatus
+			await calendarObjectsStore.updateCalendarObject({ calendarObject: this.calendarObject })
+		},
+
+		/**
 		 * Set the event's organizer
 		 *
 		 * @param {object} data The destructuring object
@@ -1379,23 +1433,60 @@ export default defineStore('calendarObjectInstance', {
 		 * Saves changes made to a single calendar-object-instance
 		 *
 		 * @param {object} data The destructuring object
-		 * @param {boolean} data.thisAndAllFuture Whether or not to save changes for all future occurrences or just this one
+		 * @param {string} data.scope Modification scope: 'occurrence', 'future', or 'series'
 		 * @param {string} data.calendarId The new calendar-id to store it in
 		 * @return {Promise<void>}
 		 */
 		async saveCalendarObjectInstance({
-			thisAndAllFuture,
+			scope,
 			calendarId,
 		}) {
 			const calendarObjectsStore = useCalendarObjectsStore()
 
 			const eventComponent = this.calendarObjectInstance.eventComponent
 			const calendarObject = this.calendarObject
+			const isForkedItem = eventComponent.primaryItem !== null
 
 			updateAlarms(eventComponent)
 
-			if (eventComponent.isDirty()) {
-				const isForkedItem = eventComponent.primaryItem !== null
+			if (eventComponent.isDirty() && eventComponent.isPartOfRecurrenceSet() && scope === 'series' && isForkedItem) {
+				// Find the master component (without RECURRENCE-ID)
+				let baseComponent = null
+				for (const component of calendarObject.calendarComponent.getComponentIterator()) {
+					if (component.name === eventComponent.name && !component.hasProperty('RECURRENCE-ID')) {
+						baseComponent = component
+						break
+					}
+				}
+
+				if (baseComponent) {
+					// construct list of properties to clone
+					const propertyNames = []
+					for (const property of baseComponent.getPropertyIterator()) {
+						if (property.name === 'UID' || property.name === 'RECURRENCE-ID' || property.name === 'DTSTART' || property.name === 'DTEND') {
+							continue
+						}
+						propertyNames.push(property.name)
+						baseComponent.deleteAllProperties(property.name)
+					}
+					// clone properties from eventComponent
+					for (const property of eventComponent.getPropertyIterator()) {
+						if (propertyNames.indexOf(property.name) === -1) {
+							continue
+						}
+						baseComponent.addProperty(property.clone())
+					}
+					// clone alarms
+					baseComponent.deleteAllComponents('VALARM')
+					for (const alarm of eventComponent.getAlarmIterator()) {
+						baseComponent.addComponent(alarm.clone())
+					}
+				}
+
+				await calendarObjectsStore.updateCalendarObject({ calendarObject })
+			}
+
+			if (eventComponent.isDirty() && scope !== 'series') {
 				let original = null
 				let fork = null
 
@@ -1403,7 +1494,7 @@ export default defineStore('calendarObjectInstance', {
 				// - primaryItem !== null -> Is this a fork or not?
 				// - eventComponent.canCreateRecurrenceExceptions() - Can we create a recurrence-exception for this item
 				if (isForkedItem && eventComponent.canCreateRecurrenceExceptions()) {
-					[original, fork] = eventComponent.createRecurrenceException(thisAndAllFuture)
+					[original, fork] = eventComponent.createRecurrenceException(scope === 'future')
 				}
 
 				await calendarObjectsStore.updateCalendarObject({ calendarObject })
@@ -1461,20 +1552,25 @@ export default defineStore('calendarObjectInstance', {
 		 * Deletes a calendar-object-instance
 		 *
 		 * @param {object} data The destructuring object
-		 * @param {boolean} data.thisAndAllFuture Whether or not to delete all future occurrences or just this one
+		 * @param {string} data.scope Deletion scope: 'occurrence', 'future', or 'series'
 		 * @return {Promise<void>}
 		 */
-		async deleteCalendarObjectInstance({ thisAndAllFuture }) {
+		async deleteCalendarObjectInstance({ scope }) {
 			const calendarObjectsStore = useCalendarObjectsStore()
-
 			const eventComponent = this.calendarObjectInstance.eventComponent
-			const isRecurrenceSetEmpty = eventComponent.removeThisOccurrence(thisAndAllFuture)
-			const calendarObject = this.calendarObject
 
+			// Singleton event or deleting all occurrences - delete the whole calendar-object
+			if (!eventComponent.isRecurring() || scope === 'series') {
+				await calendarObjectsStore.deleteCalendarObject({ calendarObject: this.calendarObject })
+				return
+			}
+
+			// Recurring event - remove this occurrence or this and all future
+			const isRecurrenceSetEmpty = eventComponent.removeThisOccurrence(scope === 'future')
 			if (isRecurrenceSetEmpty) {
-				await calendarObjectsStore.deleteCalendarObject({ calendarObject })
+				await calendarObjectsStore.deleteCalendarObject({ calendarObject: this.calendarObject })
 			} else {
-				await calendarObjectsStore.updateCalendarObject({ calendarObject })
+				await calendarObjectsStore.updateCalendarObject({ calendarObject: this.calendarObject })
 			}
 		},
 

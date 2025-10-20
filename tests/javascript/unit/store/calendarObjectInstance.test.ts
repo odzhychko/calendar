@@ -58,9 +58,7 @@ describe('store/calendarObjectInstance test suite', () => {
 
 			await store.duplicateCalendarObjectInstance({ calendarId: 'writable-calendar' })
 
-			expect(calendarObjectsStore.createNewEvent).toHaveBeenCalledWith(
-				expect.objectContaining({ calendarId: 'writable-calendar' }),
-			)
+			expect(calendarObjectsStore.createNewEvent).toHaveBeenCalledWith(expect.objectContaining({ calendarId: 'writable-calendar' }))
 		})
 
 		it('marks the duplicated event as a new, unsaved calendar-object', async () => {
@@ -136,6 +134,145 @@ describe('store/calendarObjectInstance test suite', () => {
 
 			expect(eventComponent.removeAlarm).toHaveBeenCalledWith(matchedAlarmComponent)
 			expect(calendarObjectInstance.alarms).not.toContain(alarm)
+		})
+	})
+
+	describe('saveAttendeeParticipationResponse', () => {
+		it('updates the recurring master when responding to a generated occurrence', async () => {
+			const store = useCalendarObjectInstanceStore()
+			const calendarObjectsStore = useCalendarObjectsStore()
+			const masterAttendee = {
+				email: 'attendee@example.com',
+				participationStatus: 'NEEDS-ACTION',
+			}
+			const masterComponent = {
+				name: 'VEVENT',
+				hasProperty: vi.fn().mockReturnValue(false),
+				getAttendeeIterator: vi.fn().mockReturnValue([masterAttendee]),
+			}
+			const occurrenceAttendee = {
+				email: 'ATTENDEE@example.com',
+				participationStatus: 'NEEDS-ACTION',
+			}
+			const eventComponent = {
+				name: 'VEVENT',
+				isRecurrenceException: vi.fn().mockReturnValue(false),
+			}
+			const attendee = {
+				attendeeProperty: occurrenceAttendee,
+				participationStatus: 'NEEDS-ACTION',
+			}
+			const calendarObject = {
+				calendarComponent: {
+					getComponentIterator: vi.fn().mockReturnValue([masterComponent]),
+				},
+			}
+			store.calendarObject = calendarObject
+			store.calendarObjectInstance = { eventComponent }
+			vi.spyOn(calendarObjectsStore, 'updateCalendarObject').mockResolvedValue()
+
+			await store.saveAttendeeParticipationResponse({
+				attendee,
+				participationStatus: 'ACCEPTED',
+			})
+
+			expect(masterAttendee.participationStatus).toBe('ACCEPTED')
+			expect(occurrenceAttendee.participationStatus).toBe('NEEDS-ACTION')
+			expect(attendee.participationStatus).toBe('ACCEPTED')
+			expect(calendarObjectsStore.updateCalendarObject).toHaveBeenCalledWith({ calendarObject })
+		})
+
+		it('updates an existing recurrence exception without changing the master', async () => {
+			const store = useCalendarObjectInstanceStore()
+			const calendarObjectsStore = useCalendarObjectsStore()
+			const masterAttendee = {
+				email: 'attendee@example.com',
+				participationStatus: 'ACCEPTED',
+			}
+			const exceptionAttendee = {
+				email: 'attendee@example.com',
+				participationStatus: 'NEEDS-ACTION',
+			}
+			const eventComponent = {
+				name: 'VEVENT',
+				isRecurrenceException: vi.fn().mockReturnValue(true),
+			}
+			const attendee = {
+				attendeeProperty: exceptionAttendee,
+				participationStatus: 'NEEDS-ACTION',
+			}
+			const calendarObject = {
+				calendarComponent: {
+					getComponentIterator: vi.fn().mockReturnValue([{
+						name: 'VEVENT',
+						getAttendeeIterator: vi.fn().mockReturnValue([masterAttendee]),
+					}]),
+				},
+			}
+			store.calendarObject = calendarObject
+			store.calendarObjectInstance = { eventComponent }
+			vi.spyOn(calendarObjectsStore, 'updateCalendarObject').mockResolvedValue()
+
+			await store.saveAttendeeParticipationResponse({
+				attendee,
+				participationStatus: 'DECLINED',
+			})
+
+			expect(exceptionAttendee.participationStatus).toBe('DECLINED')
+			expect(masterAttendee.participationStatus).toBe('ACCEPTED')
+			expect(attendee.participationStatus).toBe('DECLINED')
+			expect(calendarObject.calendarComponent.getComponentIterator).not.toHaveBeenCalled()
+			expect(calendarObjectsStore.updateCalendarObject).toHaveBeenCalledWith({ calendarObject })
+		})
+	})
+
+	describe('saveCalendarObjectInstance', () => {
+		it('updates the recurring base component when saving the series from an exception', async () => {
+			const store = useCalendarObjectInstanceStore()
+			const calendarObjectsStore = useCalendarObjectsStore()
+			const baseProperty = {
+				name: 'SUMMARY',
+			}
+			const exceptionPropertyClone = {}
+			const exceptionProperty = {
+				name: 'SUMMARY',
+				clone: vi.fn().mockReturnValue(exceptionPropertyClone),
+			}
+			const baseComponent = {
+				name: 'VEVENT',
+				hasProperty: vi.fn().mockReturnValue(false),
+				getPropertyIterator: vi.fn().mockReturnValue([baseProperty]),
+				deleteAllProperties: vi.fn(),
+				addProperty: vi.fn(),
+				deleteAllComponents: vi.fn(),
+				addComponent: vi.fn(),
+			}
+			const exceptionComponent = {
+				name: 'VEVENT',
+				primaryItem: {},
+				isDirty: vi.fn().mockReturnValue(true),
+				isPartOfRecurrenceSet: vi.fn().mockReturnValue(true),
+				getPropertyIterator: vi.fn().mockReturnValue([exceptionProperty]),
+				getAlarmIterator: vi.fn().mockReturnValue([]),
+			}
+			const calendarObject = {
+				calendarId: 'calendar-1',
+				calendarComponent: {
+					getComponentIterator: vi.fn().mockReturnValue([baseComponent, exceptionComponent]),
+				},
+			}
+			store.calendarObject = calendarObject
+			store.calendarObjectInstance = { eventComponent: exceptionComponent }
+			vi.spyOn(calendarObjectsStore, 'updateCalendarObject').mockResolvedValue()
+
+			await store.saveCalendarObjectInstance({
+				scope: 'series',
+				calendarId: 'calendar-1',
+			})
+
+			expect(baseComponent.deleteAllProperties).toHaveBeenCalledWith('SUMMARY')
+			expect(baseComponent.addProperty).toHaveBeenCalledWith(exceptionPropertyClone)
+			expect(calendarObjectsStore.updateCalendarObject).toHaveBeenCalledWith({ calendarObject })
 		})
 	})
 })
