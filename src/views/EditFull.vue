@@ -747,7 +747,7 @@ export default {
 			return name.split('/').pop()
 		},
 
-		prepareAccessForAttachments(scope = 'occurrence') {
+		prepareAccessForAttachments(scope) {
 			this.saveScope = scope
 			const newAttachments = this.calendarObjectInstance.attachments.filter((attachment) => {
 				// get only new attachments
@@ -772,7 +772,7 @@ export default {
 			}
 		},
 
-		saveEvent(scope = 'occurrence') {
+		saveEvent(scope) {
 			// if there is new attachments and !private, then make modal with users and files/
 			// maybe check shared access before add file
 			this.saveAndLeave(scope)

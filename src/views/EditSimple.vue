@@ -100,7 +100,6 @@
 								</template>
 								{{ $t('calendar', 'Delete this occurrence') }}
 							</ActionButton>
-							<NcActionSeparator v-if="isRecurringInstance && canDelete('future')" />
 							<ActionButton v-if="isRecurringInstance && canDelete('future')" @click="deleteAndLeave('future')">
 								<template #icon>
 									<Delete :size="20" decorative />
@@ -278,7 +277,6 @@ import {
 	NcActionLink as ActionLink,
 	NcActions as Actions,
 	NcEmptyContent as EmptyContent,
-	NcActionSeparator,
 	NcButton,
 	NcCheckboxRadioSwitch,
 	NcDialog,
@@ -325,7 +323,6 @@ export default {
 		Actions,
 		ActionButton,
 		ActionLink,
-		NcActionSeparator,
 		AlarmList,
 		Bell,
 		EmptyContent,

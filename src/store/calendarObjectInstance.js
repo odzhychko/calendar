@@ -1449,7 +1449,7 @@ export default defineStore('calendarObjectInstance', {
 
 			updateAlarms(eventComponent)
 
-			if (eventComponent.isDirty() && eventComponent.isPartOfRecurrenceSet() && scope === 'series' && isForkedItem) {
+			if (eventComponent.isDirty() && eventComponent.isPartOfRecurrenceSet() && scope === 'series') {
 				// Find the master component (without RECURRENCE-ID)
 				let baseComponent = null
 				for (const component of calendarObject.calendarComponent.getComponentIterator()) {
@@ -1459,8 +1459,10 @@ export default defineStore('calendarObjectInstance', {
 					}
 				}
 
-				if (baseComponent) {
-					// construct list of properties to clone
+				if (!baseComponent) {
+					logger.error('Could not find master component to save series-wide changes to')
+				} else {
+					// construct list of properties to clone as we might be editing a instance or fork not the base component
 					const propertyNames = []
 					for (const property of baseComponent.getPropertyIterator()) {
 						if (property.name === 'UID' || property.name === 'RECURRENCE-ID' || property.name === 'DTSTART' || property.name === 'DTEND') {
@@ -1476,14 +1478,21 @@ export default defineStore('calendarObjectInstance', {
 						}
 						baseComponent.addProperty(property.clone())
 					}
-					// clone alarms
+					// DTSTART and DTEND need to be cloned separately so that internal logic of ical.js
+					// can adjust all the recurrence rules and exceptions accordingly
+					baseComponent.startDate = eventComponent.startDate.clone()
+					baseComponent.endDate = eventComponent.endDate.clone()
+					// Only VALARM is copied here because it's the only sub-component the
+					// editor currently lets users change; other sub-components (e.g.
+					// PARTICIPANT, VLOCATION, VRESOURCE) that another client may have set
+					// are left untouched on baseComponent.
 					baseComponent.deleteAllComponents('VALARM')
 					for (const alarm of eventComponent.getAlarmIterator()) {
 						baseComponent.addComponent(alarm.clone())
 					}
-				}
 
-				await calendarObjectsStore.updateCalendarObject({ calendarObject })
+					await calendarObjectsStore.updateCalendarObject({ calendarObject })
+				}
 			}
 
 			if (eventComponent.isDirty() && scope !== 'series') {
