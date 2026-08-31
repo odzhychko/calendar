@@ -4,6 +4,8 @@
  */
 
 import { AttachmentProperty, AttendeeProperty, DateTimeValue, DurationValue, Parameter, Property, RecurValue } from '@nextcloud/calendar-js'
+import { showWarning } from '@nextcloud/dialogs'
+import { translate as t } from '@nextcloud/l10n'
 import { generateUrl } from '@nextcloud/router'
 import { defineStore } from 'pinia'
 import { markRaw } from 'vue'
@@ -1462,6 +1464,21 @@ export default defineStore('calendarObjectInstance', {
 				if (!baseComponent) {
 					logger.error('Could not find master component to save series-wide changes to')
 				} else {
+					const isBaseOccurrence = !eventComponent.originalRecurrenceId
+						|| eventComponent.originalRecurrenceId.compare(baseComponent.startDate) === 0
+
+					if (!isBaseOccurrence) {
+						const originalDuration = baseComponent.endDate.subtractDateWithTimezone(baseComponent.startDate)
+						const currentDuration = eventComponent.endDate.subtractDateWithTimezone(eventComponent.startDate)
+
+						const dateTimeWasChanged = eventComponent.startDate.compare(eventComponent.originalRecurrenceId) !== 0
+							|| currentDuration.compare(originalDuration) !== 0
+
+						if (dateTimeWasChanged) {
+							showWarning(t('calendar', 'We noticed that you adjusted the date or time. Since this is not the first occurrence of the series, the date/time changes have been discarded. To change the date or time of the whole series, please edit the first occurrence.'))
+						}
+					}
+
 					// construct list of properties to clone as we might be editing a instance or fork not the base component
 					const propertyNames = []
 					for (const property of baseComponent.getPropertyIterator()) {
@@ -1479,9 +1496,12 @@ export default defineStore('calendarObjectInstance', {
 						baseComponent.addProperty(property.clone())
 					}
 					// DTSTART and DTEND need to be cloned separately so that internal logic of ical.js
-					// can adjust all the recurrence rules and exceptions accordingly
-					baseComponent.startDate = eventComponent.startDate.clone()
-					baseComponent.endDate = eventComponent.endDate.clone()
+					// can adjust all the recurrence rules and exceptions accordingly. Only do so when
+					// editing the base occurrence - otherwise keep the base component's own date/time.
+					if (isBaseOccurrence) {
+						baseComponent.startDate = eventComponent.startDate.clone()
+						baseComponent.endDate = eventComponent.endDate.clone()
+					}
 					// Only VALARM is copied here because it's the only sub-component the
 					// editor currently lets users change; other sub-components (e.g.
 					// PARTICIPANT, VLOCATION, VRESOURCE) that another client may have set
