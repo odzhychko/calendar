@@ -33,10 +33,10 @@ describe('mixins/EditorMixin test suite', () => {
 			[false, false, false],
 			[true, false, true],
 			[false, true, true],
-		])('returns the recurrence state for generated and exception instances', (canCreateRecurrenceException, isRecurrenceException, expected) => {
+		])('returns the recurrence state for generated and exception instances', (canCreateRecurrenceException, isEditingExceptionInstance, expected) => {
 			expect(EditorMixin.computed.isRecurringInstance.call({
 				canCreateRecurrenceException,
-				isRecurrenceException,
+				isEditingExceptionInstance,
 			})).toBe(expected)
 		})
 	})
@@ -55,15 +55,15 @@ describe('mixins/EditorMixin test suite', () => {
 			[{ isRecurringInstance: true, isViewedByAttendee: true }, 'occurrence', false],
 			[{ isRecurringInstance: true, isViewedByAttendee: true }, 'future', false],
 			[{ isRecurringInstance: true, isViewedByAttendee: true }, 'series', true],
-			[{ isRecurringInstance: true, isRecurrenceException: true, isViewedByAttendee: true }, 'occurrence', true],
-			[{ isRecurringInstance: true, isRecurrenceException: true, isViewedByAttendee: true }, 'future', false],
+			[{ isRecurringInstance: true, isEditingExceptionInstance: true, isViewedByAttendee: true }, 'occurrence', true],
+			[{ isRecurringInstance: true, isEditingExceptionInstance: true, isViewedByAttendee: true }, 'future', false],
 		])('restricts deletion by availability, recurrence, and attendee state', (overrides, scope, expected) => {
 			const vm = {
 				calendarObject: { existsOnServer: true },
 				isReadOnly: false,
 				isLoading: false,
 				isRecurringInstance: false,
-				isRecurrenceException: false,
+				isEditingExceptionInstance: false,
 				isViewedByAttendee: false,
 				...overrides,
 			}
@@ -121,8 +121,8 @@ describe('mixins/EditorMixin test suite', () => {
 			[{ isRecurringInstance: true, isViewedByAttendee: true }, 'occurrence', false],
 			[{ isRecurringInstance: true, isViewedByAttendee: true }, 'future', false],
 			[{ isRecurringInstance: true, isViewedByAttendee: true }, 'series', true],
-			[{ isRecurringInstance: true, isRecurrenceException: true, isViewedByAttendee: true }, 'occurrence', true],
-			[{ isRecurringInstance: true, isRecurrenceException: true, isViewedByAttendee: true }, 'future', false],
+			[{ isRecurringInstance: true, isEditingExceptionInstance: true, isViewedByAttendee: true }, 'occurrence', true],
+			[{ isRecurringInstance: true, isEditingExceptionInstance: true, isViewedByAttendee: true }, 'future', false],
 		])('restricts updates by availability, recurrence, and attendee state', (overrides, scope, expected) => {
 			const vm = {
 				calendarObject: { existsOnServer: true },
@@ -131,7 +131,7 @@ describe('mixins/EditorMixin test suite', () => {
 				isNew: false,
 				requiresFutureUpdate: false,
 				isRecurringInstance: false,
-				isRecurrenceException: false,
+				isEditingExceptionInstance: false,
 				isViewedByAttendee: false,
 				...overrides,
 			}

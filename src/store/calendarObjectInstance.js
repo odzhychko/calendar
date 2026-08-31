@@ -1464,40 +1464,52 @@ export default defineStore('calendarObjectInstance', {
 				if (!baseComponent) {
 					logger.error('Could not find master component to save series-wide changes to')
 				} else {
+					const firstOccurrenceRecurrenceId = baseComponent.recurrenceManager
+						.getClosestOccurrence(baseComponent.startDate)
+						.getReferenceRecurrenceId()
+
 					const isBaseOccurrence = !eventComponent.originalRecurrenceId
-						|| eventComponent.originalRecurrenceId.compare(baseComponent.startDate) === 0
+						|| eventComponent.originalRecurrenceId.compare(firstOccurrenceRecurrenceId) === 0
 
 					if (!isBaseOccurrence) {
-						const originalDuration = baseComponent.endDate.subtractDateWithTimezone(baseComponent.startDate)
-						const currentDuration = eventComponent.endDate.subtractDateWithTimezone(eventComponent.startDate)
+						// The actual, unedited occurrence - used both to detect whether the user changed the date/time.
+						const originalOccurrence = baseComponent.recurrenceManager.getOccurrenceAtExactly(eventComponent.originalRecurrenceId)
 
-						const dateTimeWasChanged = eventComponent.startDate.compare(eventComponent.originalRecurrenceId) !== 0
-							|| currentDuration.compare(originalDuration) !== 0
+						const dateTimeWasChanged = eventComponent.startDate.compare(originalOccurrence.startDate) !== 0
+							|| eventComponent.endDate.compare(originalOccurrence.endDate) !== 0
 
 						if (dateTimeWasChanged) {
 							showWarning(t('calendar', 'We noticed that you adjusted the date or time. Since this is not the first occurrence of the series, the date/time changes have been discarded. To change the date or time of the whole series, please edit the first occurrence.'))
+
+							// Revert the editor's own date/time back to the original occurrence
+							eventComponent.startDate = originalOccurrence.startDate.clone()
+							eventComponent.endDate = originalOccurrence.endDate.clone()
+							this.calendarObjectInstance.startDate = getDateFromDateTimeValue(originalOccurrence.startDate)
+							this.calendarObjectInstance.endDate = getDateFromDateTimeValue(originalOccurrence.endDate)
 						}
 					}
 
-					// construct list of properties to clone as we might be editing a instance or fork not the base component
-					const propertyNames = []
+					// Clear the base component's own properties, then clone eventComponent's over wholesale
+					// we might be editing an instance or fork, not the base component itself. Both properties
+					// eventComponent already shared with the base component AND ones it didn't (e.g. a LOCATION
+					// added for the first time) need to end up on the base component.
+					const excludedPropertyNames = ['UID', 'RECURRENCE-ID', 'DTSTART', 'DTEND']
 					for (const property of baseComponent.getPropertyIterator()) {
-						if (property.name === 'UID' || property.name === 'RECURRENCE-ID' || property.name === 'DTSTART' || property.name === 'DTEND') {
+						if (excludedPropertyNames.includes(property.name)) {
 							continue
 						}
-						propertyNames.push(property.name)
 						baseComponent.deleteAllProperties(property.name)
 					}
-					// clone properties from eventComponent
 					for (const property of eventComponent.getPropertyIterator()) {
-						if (propertyNames.indexOf(property.name) === -1) {
+						if (excludedPropertyNames.includes(property.name)) {
 							continue
 						}
 						baseComponent.addProperty(property.clone())
 					}
 					// DTSTART and DTEND need to be cloned separately so that internal logic of ical.js
 					// can adjust all the recurrence rules and exceptions accordingly. Only do so when
-					// editing the base occurrence - otherwise keep the base component's own date/time.
+					// editing the base occurrence - otherwise we risk changing the date/time of the whole
+					// series when the user only intended to change a single occurrence.
 					if (isBaseOccurrence) {
 						baseComponent.startDate = eventComponent.startDate.clone()
 						baseComponent.endDate = eventComponent.endDate.clone()
@@ -1512,6 +1524,11 @@ export default defineStore('calendarObjectInstance', {
 					}
 
 					await calendarObjectsStore.updateCalendarObject({ calendarObject })
+
+					eventComponent.resetDirty()
+
+					// trigger room update but don't wait for it
+					updateRoomParticipantsFromEvent(eventComponent)
 				}
 			}
 
