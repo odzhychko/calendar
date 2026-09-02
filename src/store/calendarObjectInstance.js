@@ -29,7 +29,7 @@ import {
 	updateAlarms,
 	updateDefaultAlarm,
 } from '@/utils/alarms.js'
-import { getObjectAtRecurrenceId } from '@/utils/calendarObject.js'
+import { getObjectAtRecurrenceId, isBaseOccurrence } from '@/utils/calendarObject.js'
 import { getClosestCSS3ColorNameForHex, getHexForColorName } from '@/utils/color.js'
 import {
 	getDateFromDateTimeValue,
@@ -1452,6 +1452,12 @@ export default defineStore('calendarObjectInstance', {
 			updateAlarms(eventComponent)
 
 			if (eventComponent.isDirty() && eventComponent.isPartOfRecurrenceSet() && scope === 'series') {
+				// Do not permit applying series-wide changes from a recurrence exception
+				// Recurrence exceptions do not have the full set of properties that the base component has.
+				if (eventComponent.isRecurrenceException()) {
+					logger.error('Only "this occurrence" can be updated while editing an existing recurrence exception')
+					return
+				}
 				// Find the master component (without RECURRENCE-ID)
 				let baseComponent = null
 				for (const component of calendarObject.calendarComponent.getComponentIterator()) {
@@ -1464,20 +1470,19 @@ export default defineStore('calendarObjectInstance', {
 				if (!baseComponent) {
 					logger.error('Could not find master component to save series-wide changes to')
 				} else {
-					const firstOccurrenceRecurrenceId = baseComponent.recurrenceManager
-						.getClosestOccurrence(baseComponent.startDate)
-						.getReferenceRecurrenceId()
-
-					const isBaseOccurrence = !eventComponent.originalRecurrenceId
-						|| eventComponent.originalRecurrenceId.compare(firstOccurrenceRecurrenceId) === 0
-
-					if (!isBaseOccurrence) {
+					// Determine if eventComponent is the primary (first) occurrence of its series
+					const isPrimaryOccurrence = isBaseOccurrence(calendarObject, eventComponent)
+					
+					if (!isPrimaryOccurrence) {
 						// The actual, unedited occurrence - used both to detect whether the user changed the date/time.
 						const originalOccurrence = baseComponent.recurrenceManager.getOccurrenceAtExactly(eventComponent.originalRecurrenceId)
 
 						const dateTimeWasChanged = eventComponent.startDate.compare(originalOccurrence.startDate) !== 0
 							|| eventComponent.endDate.compare(originalOccurrence.endDate) !== 0
-
+							|| eventComponent.startDate.timezoneId !== originalOccurrence.startDate.timezoneId
+							|| eventComponent.endDate.timezoneId !== originalOccurrence.endDate.timezoneId
+							|| eventComponent.isAllDay() !== originalOccurrence.isAllDay()
+							
 						if (dateTimeWasChanged) {
 							showWarning(t('calendar', 'We noticed that you adjusted the date or time. Since this is not the first occurrence of the series, the date/time changes have been discarded. To change the date or time of the whole series, please edit the first occurrence.'))
 
@@ -1510,7 +1515,7 @@ export default defineStore('calendarObjectInstance', {
 					// can adjust all the recurrence rules and exceptions accordingly. Only do so when
 					// editing the base occurrence - otherwise we risk changing the date/time of the whole
 					// series when the user only intended to change a single occurrence.
-					if (isBaseOccurrence) {
+					if (isPrimaryOccurrence) {
 						baseComponent.startDate = eventComponent.startDate.clone()
 						baseComponent.endDate = eventComponent.endDate.clone()
 					}
@@ -1533,6 +1538,12 @@ export default defineStore('calendarObjectInstance', {
 			}
 
 			if (eventComponent.isDirty() && scope !== 'series') {
+				// Do not permit "future occurrences" edits on an existing recurrence exception
+				if (eventComponent.isRecurrenceException() && scope !== 'occurrence') {
+					logger.error('Only "this occurrence" can be updated while editing an existing recurrence exception')
+					return
+				}
+
 				let original = null
 				let fork = null
 

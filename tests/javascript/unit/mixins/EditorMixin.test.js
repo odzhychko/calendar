@@ -57,6 +57,25 @@ describe('mixins/EditorMixin test suite', () => {
 			[{ isRecurringInstance: true, isViewedByAttendee: true }, 'series', true],
 			[{ isRecurringInstance: true, isEditingExceptionInstance: true, isViewedByAttendee: true }, 'occurrence', true],
 			[{ isRecurringInstance: true, isEditingExceptionInstance: true, isViewedByAttendee: true }, 'future', false],
+			// An existing exception has nothing of its own to delete "the rest of the series"
+			// from - only "this occurrence" (the exception itself) applies here, regardless
+			// of viewer role.
+			[{ isRecurringInstance: true, isEditingExceptionInstance: true }, 'occurrence', true],
+			[{ isRecurringInstance: true, isEditingExceptionInstance: true }, 'future', false],
+			[{ isRecurringInstance: true, isEditingExceptionInstance: true }, 'series', false],
+			// The primary occurrence IS the whole series - deleting "just this occurrence"
+			// or "this and future" doesn't offer anything meaningfully different from
+			// deleting "the whole series" here (for the organizer; an attendee's own
+			// RSVP scope is unrelated and stays governed by isViewedByAttendee above).
+			[{ isRecurringInstance: true, isEditingBaseInstance: true }, 'occurrence', false],
+			[{ isRecurringInstance: true, isEditingBaseInstance: true }, 'future', false],
+			[{ isRecurringInstance: true, isEditingBaseInstance: true }, 'series', true],
+			// isEditingBaseInstance is purely position-based, so it can also be true for an
+			// exception that happens to sit at the primary occurrence's own position - the
+			// exception check must stay the sole authority there, not this one, so
+			// "occurrence" (the only scope an exception allows) must not get blocked too.
+			[{ isRecurringInstance: true, isEditingExceptionInstance: true, isEditingBaseInstance: true }, 'occurrence', true],
+			[{ isRecurringInstance: true, isEditingExceptionInstance: true, isEditingBaseInstance: true }, 'series', false],
 		])('restricts deletion by availability, recurrence, and attendee state', (overrides, scope, expected) => {
 			const vm = {
 				calendarObject: { existsOnServer: true },
@@ -64,6 +83,7 @@ describe('mixins/EditorMixin test suite', () => {
 				isLoading: false,
 				isRecurringInstance: false,
 				isEditingExceptionInstance: false,
+				isEditingBaseInstance: false,
 				isViewedByAttendee: false,
 				...overrides,
 			}
@@ -123,6 +143,25 @@ describe('mixins/EditorMixin test suite', () => {
 			[{ isRecurringInstance: true, isViewedByAttendee: true }, 'series', true],
 			[{ isRecurringInstance: true, isEditingExceptionInstance: true, isViewedByAttendee: true }, 'occurrence', true],
 			[{ isRecurringInstance: true, isEditingExceptionInstance: true, isViewedByAttendee: true }, 'future', false],
+			// An existing exception never carries its own RRULE/RDATE/EXDATE, so neither
+			// "series" nor "future" (which also needs a recurrence rule to split off of)
+			// is offered while editing one - regardless of viewer role.
+			[{ isRecurringInstance: true, isEditingExceptionInstance: true }, 'occurrence', true],
+			[{ isRecurringInstance: true, isEditingExceptionInstance: true }, 'future', false],
+			[{ isRecurringInstance: true, isEditingExceptionInstance: true }, 'series', false],
+			[{ isRecurringInstance: true, isEditingExceptionInstance: true, isViewedByAttendee: true }, 'series', false],
+			// The primary occurrence IS the whole series - "this occurrence" and "this and
+			// future" aren't offered there, only "series" (for the organizer; an attendee's
+			// own RSVP scope is unrelated and stays governed by isViewedByAttendee above).
+			[{ isRecurringInstance: true, isEditingBaseInstance: true }, 'occurrence', false],
+			[{ isRecurringInstance: true, isEditingBaseInstance: true }, 'future', false],
+			[{ isRecurringInstance: true, isEditingBaseInstance: true }, 'series', true],
+			// isEditingBaseInstance is purely position-based, so it can also be true for an
+			// exception that happens to sit at the primary occurrence's own position - the
+			// exception check must stay the sole authority there, not this one, so
+			// "occurrence" (the only scope an exception allows) must not get blocked too.
+			[{ isRecurringInstance: true, isEditingExceptionInstance: true, isEditingBaseInstance: true }, 'occurrence', true],
+			[{ isRecurringInstance: true, isEditingExceptionInstance: true, isEditingBaseInstance: true }, 'series', false],
 		])('restricts updates by availability, recurrence, and attendee state', (overrides, scope, expected) => {
 			const vm = {
 				calendarObject: { existsOnServer: true },
@@ -132,6 +171,7 @@ describe('mixins/EditorMixin test suite', () => {
 				requiresFutureUpdate: false,
 				isRecurringInstance: false,
 				isEditingExceptionInstance: false,
+				isEditingBaseInstance: false,
 				isViewedByAttendee: false,
 				...overrides,
 			}

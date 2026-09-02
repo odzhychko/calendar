@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2026 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import { DateTimeValue, getParserManager } from '@nextcloud/calendar-js'
+import { createEvent, DateTimeValue, getParserManager } from '@nextcloud/calendar-js'
 import { showWarning } from '@nextcloud/dialogs'
 import { translate } from '@nextcloud/l10n'
 import { createPinia, setActivePinia } from 'pinia'
@@ -13,7 +13,7 @@ import { updateRoomParticipantsFromEvent } from '@/services/talkService'
 import getTimezoneManager from '@/services/timezoneDataProviderService.js'
 import useCalendarObjectInstanceStore from '@/store/calendarObjectInstance.js'
 import useCalendarObjectsStore from '@/store/calendarObjects.js'
-import { getObjectAtRecurrenceId } from '@/utils/calendarObject.js'
+import { getObjectAtRecurrenceId, isBaseOccurrence } from '@/utils/calendarObject.js'
 
 vi.mock('@/models/alarm.js')
 vi.mock('@/models/event.js')
@@ -26,6 +26,7 @@ const mockedMapAlarmComponentToAlarmObject = vi.mocked(mapAlarmComponentToAlarmO
 const mockedCopyCalendarObjectInstanceIntoEventComponent = vi.mocked(copyCalendarObjectInstanceIntoEventComponent)
 const mockedMapEventComponentToEventObject = vi.mocked(mapEventComponentToEventObject)
 const mockedGetObjectAtRecurrenceId = vi.mocked(getObjectAtRecurrenceId)
+const mockedisBaseOccurrence = vi.mocked(isBaseOccurrence)
 
 /**
  * Builds a minimal fake DateTimeValue-like object, just enough for the
@@ -98,6 +99,7 @@ describe('store/calendarObjectInstance test suite', () => {
 		mockedCopyCalendarObjectInstanceIntoEventComponent.mockReset()
 		mockedMapEventComponentToEventObject.mockReset().mockReturnValue({ eventComponent: {} })
 		mockedGetObjectAtRecurrenceId.mockReset().mockReturnValue({})
+		mockedisBaseOccurrence.mockReset()
 		vi.mocked(showWarning).mockClear()
 		vi.mocked(translate).mockClear().mockReturnValue('translated warning')
 		vi.mocked(updateRoomParticipantsFromEvent).mockClear()
@@ -302,16 +304,15 @@ describe('store/calendarObjectInstance test suite', () => {
 
 	describe('saveCalendarObjectInstance', () => {
 		/**
-		 * @param baseStart Base component's own DTSTART. This is not necessarily a real
-		 *                  occurrence - e.g. it may not match the RRULE's BYDAY - so it must
-		 *                  not be used directly to identify the first occurrence.
+		 * Whether eventComponent is the primary occurrence is decided by the mocked
+		 * isBaseOccurrence() (configured per test below) - it has its
+		 * own dedicated, real-calendar-js-backed tests in utils/calendarObject.test.js,
+		 * including the DTSTART-misalignment edge case.
+		 *
+		 * @param baseStart Base component's own DTSTART
 		 * @param baseEnd Base component's own DTEND
-		 * @param firstOccurrenceRecurrenceId Recurrence-id of the first occurrence the
-		 *                                    recurrence-manager actually generates. Defaults
-		 *                                    to baseStart for a series whose DTSTART lines up
-		 *                                    with its own recurrence rule.
 		 */
-		function setUpBaseComponent(baseStart: number, baseEnd: number, firstOccurrenceRecurrenceId: number = baseStart) {
+		function setUpBaseComponent(baseStart: number, baseEnd: number) {
 			const baseProperty = {
 				name: 'SUMMARY',
 			}
@@ -326,9 +327,6 @@ describe('store/calendarObjectInstance test suite', () => {
 				startDate: fakeDateTime(baseStart),
 				endDate: fakeDateTime(baseEnd),
 				recurrenceManager: {
-					getClosestOccurrence: vi.fn().mockReturnValue({
-						getReferenceRecurrenceId: () => fakeDateTime(firstOccurrenceRecurrenceId),
-					}),
 					// Overridden per-test via mockReturnValue() where the non-primary-occurrence
 					// branch needs to look up the actual, unedited occurrence.
 					getOccurrenceAtExactly: vi.fn(),
@@ -352,6 +350,7 @@ describe('store/calendarObjectInstance test suite', () => {
 				primaryItem: {},
 				isDirty: vi.fn().mockReturnValue(true),
 				isPartOfRecurrenceSet: vi.fn().mockReturnValue(true),
+				isRecurrenceException: vi.fn().mockReturnValue(false),
 				getPropertyIterator: vi.fn().mockReturnValue([exceptionProperty]),
 				getAlarmIterator: vi.fn().mockReturnValue([]),
 				resetDirty: vi.fn(),
@@ -376,6 +375,7 @@ describe('store/calendarObjectInstance test suite', () => {
 			store.calendarObject = calendarObject
 			store.calendarObjectInstance = { eventComponent: exceptionComponent }
 			vi.spyOn(calendarObjectsStore, 'updateCalendarObject').mockResolvedValue()
+			mockedisBaseOccurrence.mockReturnValue(false)
 			// The real, unedited occurrence - same position/length as the (unchanged) exception
 			baseComponent.recurrenceManager.getOccurrenceAtExactly.mockReturnValue({ startDate: fakeDateTime(5000), endDate: fakeDateTime(6000) })
 
@@ -416,6 +416,7 @@ describe('store/calendarObjectInstance test suite', () => {
 			store.calendarObject = calendarObject
 			store.calendarObjectInstance = { eventComponent: primaryOccurrence }
 			vi.spyOn(calendarObjectsStore, 'updateCalendarObject').mockResolvedValue()
+			mockedisBaseOccurrence.mockReturnValue(true)
 
 			await store.saveCalendarObjectInstance({
 				scope: 'series',
@@ -439,6 +440,7 @@ describe('store/calendarObjectInstance test suite', () => {
 			store.calendarObject = calendarObject
 			store.calendarObjectInstance = { eventComponent: primaryOccurrence }
 			vi.spyOn(calendarObjectsStore, 'updateCalendarObject').mockResolvedValue()
+			mockedisBaseOccurrence.mockReturnValue(true)
 
 			await store.saveCalendarObjectInstance({
 				scope: 'series',
@@ -448,6 +450,71 @@ describe('store/calendarObjectInstance test suite', () => {
 			// eventComponent is a throwaway fork never added to the calendar-object's
 			// component tree, so calendarComponent.toICS() never undirtifies it on its own
 			expect(primaryOccurrence.resetDirty).toHaveBeenCalled()
+		})
+
+		it.each(['series', 'future'] as const)('refuses to save %s-wide changes while editing an existing recurrence exception', async (scope) => {
+			const store = useCalendarObjectInstanceStore()
+			const calendarObjectsStore = useCalendarObjectsStore()
+			const baseComponent = setUpBaseComponent(1000, 2000)
+			const exceptionOccurrence = setUpEventComponent(1000, 1000, 2000)
+			exceptionOccurrence.isRecurrenceException = vi.fn().mockReturnValue(true)
+			// "future" would otherwise reach createRecurrenceException(), which isn't
+			// stubbed here - if the early return is ever bypassed, this throws loudly
+			// instead of silently succeeding against an undefined method.
+			const calendarObject = {
+				calendarId: 'calendar-1',
+				calendarComponent: {
+					getComponentIterator: vi.fn().mockReturnValue([baseComponent, exceptionOccurrence]),
+				},
+			}
+			store.calendarObject = calendarObject
+			store.calendarObjectInstance = { eventComponent: exceptionOccurrence }
+			vi.spyOn(calendarObjectsStore, 'updateCalendarObject').mockResolvedValue()
+			vi.spyOn(calendarObjectsStore, 'moveCalendarObject').mockResolvedValue()
+
+			// calendarId also differs from calendarObject.calendarId here, to pin down that
+			// the early return bails out of the whole action - including the calendar move
+			// below, which is otherwise unrelated to scope - not just the series-wide copy.
+			await store.saveCalendarObjectInstance({
+				scope,
+				calendarId: 'calendar-2',
+			})
+
+			// The base component's RRULE/RDATE/EXDATE (and everything else) must be left
+			// completely untouched - an exception has none of these to (wrongly) copy over
+			expect(baseComponent.deleteAllProperties).not.toHaveBeenCalled()
+			expect(baseComponent.addProperty).not.toHaveBeenCalled()
+			expect(calendarObjectsStore.updateCalendarObject).not.toHaveBeenCalled()
+			expect(calendarObjectsStore.moveCalendarObject).not.toHaveBeenCalled()
+		})
+
+		it.each(['occurrence', 'future'] as const)('refuses to save %s-wide changes while editing the primary occurrence of a series', async (scope) => {
+			const store = useCalendarObjectInstanceStore()
+			const calendarObjectsStore = useCalendarObjectsStore()
+			const baseComponent = setUpBaseComponent(1000, 2000)
+			const primaryOccurrence = setUpEventComponent(1000, 1000, 2000)
+			// "occurrence"/"future" would otherwise reach createRecurrenceException(), which
+			// isn't stubbed here - if the early return is ever bypassed, this throws loudly
+			// instead of silently succeeding against an undefined method.
+			const calendarObject = {
+				calendarId: 'calendar-1',
+				calendarComponent: {
+					getComponentIterator: vi.fn().mockReturnValue([baseComponent, primaryOccurrence]),
+				},
+			}
+			store.calendarObject = calendarObject
+			store.calendarObjectInstance = { eventComponent: primaryOccurrence }
+			vi.spyOn(calendarObjectsStore, 'updateCalendarObject').mockResolvedValue()
+			mockedisBaseOccurrence.mockReturnValue(true)
+
+			await store.saveCalendarObjectInstance({
+				scope,
+				calendarId: 'calendar-1',
+			})
+
+			expect(baseComponent.deleteAllProperties).not.toHaveBeenCalled()
+			expect(baseComponent.addProperty).not.toHaveBeenCalled()
+			expect(calendarObjectsStore.updateCalendarObject).not.toHaveBeenCalled()
 		})
 
 		it('applies the date/time change when editing the primary occurrence of the series', async () => {
@@ -465,6 +532,7 @@ describe('store/calendarObjectInstance test suite', () => {
 			store.calendarObject = calendarObject
 			store.calendarObjectInstance = { eventComponent: primaryOccurrence }
 			vi.spyOn(calendarObjectsStore, 'updateCalendarObject').mockResolvedValue()
+			mockedisBaseOccurrence.mockReturnValue(true)
 
 			await store.saveCalendarObjectInstance({
 				scope: 'series',
@@ -473,34 +541,6 @@ describe('store/calendarObjectInstance test suite', () => {
 
 			expect(baseComponent.startDate.time).toBe(1500)
 			expect(baseComponent.endDate.time).toBe(2500)
-			expect(showWarning).not.toHaveBeenCalled()
-		})
-
-		it('applies the date/time change when DTSTART does not match the recurrence rule (e.g. RRULE BYDAY excludes it)', async () => {
-			const store = useCalendarObjectInstanceStore()
-			const calendarObjectsStore = useCalendarObjectsStore()
-			// DTSTART (1000) is not a real occurrence of the series - the first one the
-			// recurrence-manager actually generates is at 5000
-			const baseComponent = setUpBaseComponent(1000, 2000, 5000)
-			// Forked at the real first occurrence, and then moved
-			const firstRealOccurrence = setUpEventComponent(5000, 5500, 6500)
-			const calendarObject = {
-				calendarId: 'calendar-1',
-				calendarComponent: {
-					getComponentIterator: vi.fn().mockReturnValue([baseComponent, firstRealOccurrence]),
-				},
-			}
-			store.calendarObject = calendarObject
-			store.calendarObjectInstance = { eventComponent: firstRealOccurrence }
-			vi.spyOn(calendarObjectsStore, 'updateCalendarObject').mockResolvedValue()
-
-			await store.saveCalendarObjectInstance({
-				scope: 'series',
-				calendarId: 'calendar-1',
-			})
-
-			expect(baseComponent.startDate.time).toBe(5500)
-			expect(baseComponent.endDate.time).toBe(6500)
 			expect(showWarning).not.toHaveBeenCalled()
 		})
 
@@ -521,6 +561,7 @@ describe('store/calendarObjectInstance test suite', () => {
 			store.calendarObject = calendarObject
 			store.calendarObjectInstance = { eventComponent: movedOccurrence }
 			vi.spyOn(calendarObjectsStore, 'updateCalendarObject').mockResolvedValue()
+			mockedisBaseOccurrence.mockReturnValue(false)
 			// The real, unedited occurrence - what the editor should revert back to
 			baseComponent.recurrenceManager.getOccurrenceAtExactly.mockReturnValue({ startDate: fakeDateTime(300_000), endDate: fakeDateTime(360_000) })
 
@@ -594,6 +635,35 @@ describe('store/calendarObjectInstance test suite', () => {
 			const jsDateRoundTripped = DateTimeValue.fromJSDate(secondOccurrenceRecurrenceId.jsDate, true)
 			expect(jsDateRoundTripped.isDate).toBe(false)
 			expect(baseComponent.recurrenceManager.getOccurrenceAtExactly(jsDateRoundTripped)).toBeNull()
+		})
+
+		it('does not crash saving a brand new, non-recurring event (real calendar-js)', async () => {
+			// Regression test: the primary-occurrence/exception guards must live inside
+			// their own scope-specific if-blocks, not run unconditionally for every save -
+			// isBaseOccurrence() calls eventComponent.isPartOfRecurrenceSet(), which is only
+			// meaningful once a recurrence-manager and master item exist. Calling it up front
+			// for a brand new event's first save previously broke saving new events entirely.
+			const start = DateTimeValue.fromJSDate(new Date('2026-09-07T10:00:00Z'), true)
+			const end = DateTimeValue.fromJSDate(new Date('2026-09-07T11:00:00Z'), true)
+			const calendarComponent = createEvent(start, end)
+			const eventComponent = calendarComponent.getVObjectIterator().next().value
+			eventComponent.updatePropertyWithValue('SUMMARY', 'New event')
+			eventComponent.markDirty()
+
+			const calendarObject = { calendarComponent, calendarId: 'personal', existsOnServer: false }
+
+			const store = useCalendarObjectInstanceStore()
+			const calendarObjectsStore = useCalendarObjectsStore()
+			store.calendarObject = calendarObject
+			store.calendarObjectInstance = { eventComponent }
+			vi.spyOn(calendarObjectsStore, 'updateCalendarObject').mockResolvedValue()
+
+			await expect(store.saveCalendarObjectInstance({
+				scope: 'occurrence',
+				calendarId: 'personal',
+			})).resolves.not.toThrow()
+
+			expect(calendarObjectsStore.updateCalendarObject).toHaveBeenCalledWith({ calendarObject })
 		})
 	})
 })

@@ -17,6 +17,7 @@ import useSettingsStore from '@/store/settings.js'
 import useWidgetStore from '@/store/widget.js'
 import { updateDefaultAlarm } from '@/utils/alarms.js'
 import { removeMailtoPrefix } from '@/utils/attendee.js'
+import { isBaseOccurrence } from '@/utils/calendarObject.js'
 import { uidToHexColor } from '@/utils/color.js'
 import { dateFactory } from '@/utils/date.js'
 import logger from '@/utils/logger.js'
@@ -52,7 +53,8 @@ export default {
 			requiresActionOnRouteLeave: true,
 			// Whether changing the recurrence rule requires updating this and future occurrences
 			requiresFutureUpdate: false,
-			// Whether or not the base item is being edited
+			// Whether the primary (first) occurrence of a recurring series is being edited,
+			// as opposed to any later occurrence - always true for a brand new event
 			isEditingBaseInstance: false,
 			// Whether or not a recurrence-exception is being edited
 			isEditingExceptionInstance: false,
@@ -496,7 +498,7 @@ export default {
 				await this.loadingCalendars()
 				await this.calendarObjectInstanceStore.getCalendarObjectInstanceByObjectIdAndRecurrenceId({ objectId, recurrenceId })
 				this.calendarId = this.calendarObject.calendarId
-				this.isEditingBaseInstance = this.eventComponent.isMasterItem()
+				this.isEditingBaseInstance = isBaseOccurrence(this.calendarObject, this.eventComponent)
 				this.isEditingExceptionInstance = this.eventComponent.isRecurrenceException()
 				logger.debug('[Editor] Event loaded successfully')
 			} catch (error) {
@@ -717,8 +719,14 @@ export default {
 			if (!this.isRecurringInstance) {
 				return scope === 'occurrence'
 			}
+			if ((scope === 'series' || scope === 'future') && this.isEditingExceptionInstance) {
+				return false
+			}
 			if (this.isViewedByAttendee) {
 				return scope === 'series' || (this.isEditingExceptionInstance && scope === 'occurrence')
+			}
+			if (!this.isEditingExceptionInstance && this.isEditingBaseInstance && scope !== 'series') {
+				return false
 			}
 
 			return ['occurrence', 'future', 'series'].includes(scope)
@@ -789,8 +797,14 @@ export default {
 			if (!this.isRecurringInstance) {
 				return scope === 'occurrence'
 			}
+			if ((scope === 'series' || scope === 'future') && this.isEditingExceptionInstance) {
+				return false
+			}
 			if (this.isViewedByAttendee) {
 				return scope === 'series' || (this.isEditingExceptionInstance && scope === 'occurrence')
+			}
+			if (!this.isEditingExceptionInstance && this.isEditingBaseInstance && scope !== 'series') {
+				return false
 			}
 
 			return ['occurrence', 'future', 'series'].includes(scope)
@@ -1053,7 +1067,7 @@ export default {
 					await vm.loadingCalendars()
 					await vm.calendarObjectInstanceStore.getCalendarObjectInstanceByObjectIdAndRecurrenceId({ objectId, recurrenceId })
 					vm.calendarId = vm.calendarObject.calendarId
-					vm.isEditingBaseInstance = vm.eventComponent.isMasterItem()
+					vm.isEditingBaseInstance = isBaseOccurrence(vm.calendarObject, vm.eventComponent)
 					vm.isEditingExceptionInstance = vm.eventComponent.isRecurrenceException()
 				} catch (error) {
 					logger.debug(error)
@@ -1133,7 +1147,7 @@ export default {
 				await this.loadingCalendars()
 				await this.calendarObjectInstanceStore.getCalendarObjectInstanceByObjectIdAndRecurrenceId({ objectId, recurrenceId })
 				this.calendarId = this.calendarObject.calendarId
-				this.isEditingBaseInstance = this.eventComponent.isMasterItem()
+				this.isEditingBaseInstance = isBaseOccurrence(this.calendarObject, this.eventComponent)
 				this.isEditingExceptionInstance = this.eventComponent.isRecurrenceException()
 			} catch (error) {
 				logger.debug(error)
